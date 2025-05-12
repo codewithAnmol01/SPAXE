@@ -1,1 +1,207 @@
 # SPAXE
+import cv2
+import numpy as np
+from deepface import DeepFace
+import tkinter as tk
+from tkinter import ttk, Frame
+from PIL import Image, ImageTk
+import threading
+import time
+
+class FacialEmotionDetector:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Emotion Detection")
+        self.root.configure(bg="#f0f0f0")
+        self.root.geometry("900x620")
+        self.root.resizable(True, True)
+        
+        # Initialize variables
+        self.is_running = False
+        self.cap = None
+        self.frame = None
+        self.emotion_data = {"angry": 0, "disgust": 0, "fear": 0, "happy": 0, 
+                            "sad": 0, "surprise": 0, "neutral": 0}
+        self.dominant_emotion = "neutral"
+        
+        # Create UI components
+        self.create_ui()
+        
+    def create_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Left frame for video
+        self.video_frame = ttk.Frame(main_frame, borderwidth=2, relief="groove")
+        self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Video canvas
+        self.canvas = tk.Canvas(self.video_frame, bg="black")
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Right frame for controls and statistics
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, pady=5, expand=False, width=300)
+        
+        # Title
+        ttk.Label(control_frame, text="Facial Emotion Analysis", font=("Arial", 16, "bold")).pack(pady=10)
+        
+        # Buttons
+        btn_frame = ttk.Frame(control_frame)
+        btn_frame.pack(fill=tk.X, pady=10)
+        
+        self.style = ttk.Style()
+        self.style.configure("Green.TButton", foreground="white", background="green")
+        self.style.configure("Red.TButton", foreground="white", background="red")
+        
+        self.start_btn = ttk.Button(btn_frame, text="Start", style="Green.TButton", command=self.start_detection)
+        self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        self.stop_btn = ttk.Button(btn_frame, text="Stop", style="Red.TButton", command=self.stop_detection, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=5)
+        
+        # Emotion display section
+        emotion_frame = ttk.LabelFrame(control_frame, text="Emotion Analysis")
+        emotion_frame.pack(fill=tk.BOTH, pady=10, expand=True)
+        
+        # Current emotion display
+        self.emotion_label = ttk.Label(emotion_frame, text="Current Emotion: --", font=("Arial", 12))
+        self.emotion_label.pack(pady=10)
+        
+        # Progress bars for emotions
+        emotions = ["Happy", "Sad", "Angry", "Surprise", "Fear", "Disgust", "Neutral"]
+        self.emotion_bars = {}
+        
+        for emotion in emotions:
+            frame = ttk.Frame(emotion_frame)
+            frame.pack(fill=tk.X, pady=5)
+            
+            label = ttk.Label(frame, text=f"{emotion}:", width=10)
+            label.pack(side=tk.LEFT)
+            
+            progress = ttk.Progressbar(frame, length=180, mode='determinate')
+            progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            
+            value_label = ttk.Label(frame, text="0%", width=5)
+            value_label.pack(side=tk.LEFT)
+            
+            self.emotion_bars[emotion.lower()] = (progress, value_label)
+            
+        # Status bar
+        self.status_var = tk.StringVar()
+        self.status_var.set("Ready")
+        self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+    def start_detection(self):
+        if not self.is_running:
+            self.is_running = True
+            self.cap = cv2.VideoCapture(0)
+            
+            self.start_btn.config(state=tk.DISABLED)
+            self.stop_btn.config(state=tk.NORMAL)
+            self.status_var.set("Detection started")
+            
+            # Start detection in a separate thread
+            self.detection_thread = threading.Thread(target=self.detect_emotion)
+            self.detection_thread.daemon = True
+            self.detection_thread.start()
+    
+    def stop_detection(self):
+        self.is_running = False
+        self.start_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
+        self.status_var.set("Detection stopped")
+        
+        if self.cap is not None:
+            self.cap.release()
+    
+    def update_emotion_bars(self, emotion_scores):
+        for emotion, score in emotion_scores.items():
+            if emotion in self.emotion_bars:
+                progress, label = self.emotion_bars[emotion]
+                progress['value'] = score * 100
+                label.config(text=f"{int(score * 100)}%")
+        
+        self.emotion_label.config(text=f"Current Emotion: {self.dominant_emotion.capitalize()}")
+        
+    def detect_emotion(self):
+        last_analysis_time = 0
+        analysis_interval = 1.0  # Analyze every 1 second
+        
+        while self.is_running:
+            ret, frame = self.cap.read()
+            if not ret:
+                self.status_var.set("Camera error")
+                break
+                
+            # Flip the frame horizontally for a more natural view
+            frame = cv2.flip(frame, 1)
+            
+            # Convert to RGB for display
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Perform emotion analysis at intervals to reduce CPU usage
+            current_time = time.time()
+            if current_time - last_analysis_time > analysis_interval:
+                try:
+                    # Analyze emotions in the frame
+                    result = DeepFace.analyze(frame, actions=['emotion'], enforce_detection=False)
+                    
+                    # Get emotion scores
+                    emotion_scores = result[0]['emotion']
+                    
+                    # Convert to normalized values
+                    total = sum(emotion_scores.values())
+                    normalized_scores = {k: v/total for k, v in emotion_scores.items()}
+                    
+                    # Get the dominant emotion
+                    self.dominant_emotion = result[0]['dominant_emotion']
+                    
+                    # Update the UI with emotion data
+                    self.root.after(0, self.update_emotion_bars, normalized_scores)
+                    
+                    # Add a label on the frame
+                    cv2.putText(rgb_frame, f"{self.dominant_emotion.upper()}", 
+                                (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    
+                    last_analysis_time = current_time
+                    
+                except Exception as e:
+                    pass
+            
+            # Draw a blue frame if a face is detected
+            try:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+                
+                for (x, y, w, h) in faces:
+                    cv2.rectangle(rgb_frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+            except:
+                pass
+            
+            # Convert to PhotoImage format for tkinter
+            h, w, c = rgb_frame.shape
+            img = Image.fromarray(rgb_frame)
+            photo = ImageTk.PhotoImage(image=img)
+            
+            # Update canvas
+            self.canvas.config(width=w, height=h)
+            self.canvas.create_image(0, 0, image=photo, anchor=tk.NW)
+            self.canvas.image = photo  # Keep a reference to prevent garbage collection
+            
+            # Process tkinter events to keep UI responsive
+            self.root.update_idletasks()
+            self.root.update()
+    
+    def on_closing(self):
+        self.stop_detection()
+        self.root.destroy()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = FacialEmotionDetector(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_closing)
+    root.mainloop()
